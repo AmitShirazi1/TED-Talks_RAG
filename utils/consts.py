@@ -1,0 +1,9 @@
+CSV_FILE_PATH = "ted_talks_en.csv"
+
+INDEX_NAME = "ted-talks"
+EMBEDDING_MODEL = "RPRTHPB-text-embedding-3-small"
+CHAT_MODEL = "RPRTHPB-gpt-5-mini"
+
+DEFAULT_CHUNK_SIZE = 1000
+DEFAULT_OVERLAP = 150
+DEFAULT_RETRIEVE_TOP_K = 8
