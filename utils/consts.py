@@ -1,6 +1,6 @@
-CSV_FILE_PATH = "ted_talks_en.csv"
+CSV_FILE_PATH = "tiny_ted_data.csv"
 
-INDEX_NAME = "ted-talks"
+INDEX_NAME = "tiny-ted"
 EMBEDDING_MODEL = "RPRTHPB-text-embedding-3-small"
 CHAT_MODEL = "RPRTHPB-gpt-5-mini"
 

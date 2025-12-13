@@ -4,10 +4,11 @@ A Retrieval-Augmented Generation system for querying TED Talks.
 """
 
 import os
+import re
 import pandas as pd
 from pinecone import Pinecone, ServerlessSpec
 from openai import OpenAI
-from typing import List, Dict
+from typing import List, Dict, Optional
 from utils.consts import CSV_FILE_PATH, INDEX_NAME, EMBEDDING_MODEL, CHAT_MODEL, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP, DEFAULT_RETRIEVE_TOP_K
 import json
 
@@ -216,10 +217,13 @@ class TEDTalksRAG:
         # Create query embedding
         query_embedding = self._create_embedding(query)
         
+        # For fact retrieval queries, retrieve more chunks to ensure we have enough unique talks
+        retrieve_k = top_k * 2 if self._is_fact_retrieval_query(query) else top_k
+        
         # Search in Pinecone
         results = self.index.query(
             vector=query_embedding,
-            top_k=top_k,
+            top_k=retrieve_k,
             include_metadata=True
         )
         
@@ -237,6 +241,116 @@ class TEDTalksRAG:
             })
         
         return chunks
+    
+    def _is_fact_retrieval_query(self, query: str) -> bool:
+        """
+        Detect if the query is asking for a specific TED talk (fact retrieval).
+        
+        Args:
+            query: User's query
+        
+        Returns:
+            True if query is asking for a specific talk/talks
+        """
+        query_lower = query.lower()
+        fact_indicators = [
+            "find a ted talk",
+            "find one ted talk",
+            "which ted talk",
+            "what ted talk",
+            "name a ted talk",
+            "give me a ted talk",
+            "recommend a ted talk",
+            "suggest a ted talk",
+            "provide the title",
+            "return a list of",
+            "list of exactly",
+            "find a talk",
+            "which talk",
+            "what talk"
+        ]
+        
+        return any(indicator in query_lower for indicator in fact_indicators)
+    
+    def _extract_number_from_query(self, query: str) -> Optional[int]:
+        """
+        Extract a specific number from the query if present (e.g., "exactly 3 talks").
+        
+        Args:
+            query: User's query
+        
+        Returns:
+            Number extracted, or None if not found
+        """
+        query_lower = query.lower()
+        
+        NUMBER_WORDS = {
+            "one": 1,
+            "two": 2,
+            "three": 3,
+            "four": 4,
+            "five": 5,
+            "six": 6,
+            "seven": 7,
+            "eight": 8,
+            "nine": 9,
+            "ten": 10,
+        }
+
+        word_patterns = [
+            r'\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+talks?\b',
+            r'\bexactly\s+(one|two|three|four|five|six|seven|eight|nine|ten)\b',
+        ]
+
+        for pattern in word_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                return NUMBER_WORDS[match.group(1)]
+
+
+        # Look for patterns like "exactly 3", "3 talks", "list of 3", "a ted talk"
+        patterns = [
+            r'exactly\s+(\d+)',
+            r'list\s+of\s+exactly\s+(\d+)',
+            r'(\d+)\s+ted\s+talks',
+            r'(\d+)\s+talks',
+            r'a\s+ted\s+talk',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                if match.lastindex:
+                    return int(match.group(1))
+                else:
+                    return 1
+        
+        return None
+    
+    def _deduplicate_chunks_by_talk(self, chunks: List[Dict]) -> List[Dict]:
+        """
+        Deduplicate chunks by talk_id, keeping only the highest scoring chunk per talk.
+        
+        Args:
+            chunks: List of chunks (may contain multiple chunks from same talk)
+        
+        Returns:
+            Deduplicated list with one chunk per talk (highest score)
+        """
+        talk_dict = {}
+        
+        for chunk in chunks:
+            talk_id = chunk.get("talk_id")
+            if talk_id:
+                # Keep the chunk with the highest score for each talk
+                if talk_id not in talk_dict or chunk["score"] > talk_dict[talk_id]["score"]:
+                    talk_dict[talk_id] = chunk
+        
+        # Return chunks sorted by score (descending)
+        deduplicated = list(talk_dict.values())
+        deduplicated.sort(key=lambda x: x["score"], reverse=True)
+        
+        return deduplicated
     
 
     def query(self, user_question: str, top_k: int = DEFAULT_RETRIEVE_TOP_K) -> Dict:
@@ -260,9 +374,23 @@ class TEDTalksRAG:
                 "sources": []
             }
         
+        # Check if this is a fact retrieval query
+        is_fact_query = self._is_fact_retrieval_query(user_question)
+        
+        # For fact retrieval queries, deduplicate by talk_id to get unique talks
+        if is_fact_query:
+            chunks = self._deduplicate_chunks_by_talk(chunks)
+            
+            # Limit to requested number or 1 if not specified
+            requested_number = self._extract_number_from_query(user_question)
+            if requested_number:
+                chunks = chunks[:min(requested_number, len(chunks))]
+                print(f"After deduplication: {len(chunks)} unique talk(s) found (requested: {requested_number})")
+        
         # Build context from retrieved chunks
         context_parts = []
         sources = []
+        seen_talk_ids = set()  # Track unique talks for sources list
         
         for i, chunk in enumerate(chunks, 1):
             context_part = f"[Source {i}]\n"
@@ -273,12 +401,16 @@ class TEDTalksRAG:
             context_part += f"Transcript excerpt:\n{chunk['chunk_text']}\n"
             context_parts.append(context_part)
             
-            sources.append({
-                "title": chunk['title'],
-                "speaker": chunk['speaker'],
-                "talk_id": chunk['talk_id'],
-                "relevance_score": chunk['score']
-            })
+            # Only add to sources if we haven't seen this talk_id yet
+            talk_id = chunk['talk_id']
+            if talk_id not in seen_talk_ids:
+                sources.append({
+                    "title": chunk['title'],
+                    "speaker": chunk['speaker'],
+                    "talk_id": chunk['talk_id'],
+                    "relevance_score": chunk['score']
+                })
+                seen_talk_ids.add(talk_id)
         
         context = "\n\n".join(context_parts)
         
@@ -293,14 +425,38 @@ class TEDTalksRAG:
             based on the provided TED data." Always explain your answer 
             using the given context, quoting or paraphrasing the relevant 
             transcript or metadata when helpful.
+        """
+        
+        # Create specialized prompt for fact retrieval queries
+        if is_fact_query:
+            if requested_number and requested_number > 1:
+                system_prompt += f"""\n
+                    IMPORTANT: The user is asking for EXACTLY {requested_number} specific TED talk(s). You must:
+                    1. Identify EXACTLY {requested_number} talk(s) from the provided context that best match the query
+                    2. Return the EXACT title and speaker name for each talk from the context
+                    3. Provide exactly {requested_number} talk(s) - no more, no less
+                    4. Be concise and direct - provide the title(s) and speaker name(s) as requested
+                    5. Format each talk clearly: "Title: [title] by [speaker]"
+                    6. If the context doesn't contain enough matching talks, respond: "I don't know based on the provided TED data."
 
-            Please answer the question based ONLY on the information provided in the context above. If the context doesn't contain enough information, please say so explicitly.
-            """
+                    Format your answer clearly with each talk's title and speaker name prominently displayed.
+                    """
+            else:
+                system_prompt += """\n
+                    IMPORTANT: The user is asking for a SINGLE, SPECIFIC TED talk. You must:
+                    1. Identify ONE specific talk from the provided context that best matches the query
+                    2. Return the EXACT title and speaker name from the context
+                    3. Do NOT mention multiple talks unless the query explicitly asks for multiple
+                    4. Be concise and direct - provide the title and speaker as requested
+                    5. Format clearly: "Title: [title] by [speaker]"
+                    6. If the context doesn't contain a matching talk, respond: "I don't know based on the provided TED data."
 
+                    Format your answer clearly with the title and speaker name prominently displayed.
+                    """
+        
         user_prompt = f"""Question: {user_question}
-            Context from TED Talks database:
-            {context}
-            """
+Context from TED Talks database:
+{context}"""
 
         # Get answer from LLM
         print("Generating answer...")

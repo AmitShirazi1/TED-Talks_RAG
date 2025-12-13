@@ -4,6 +4,8 @@ Example usage of the TED Talks RAG system.
 
 from rag_system import TEDTalksRAG
 import json
+from rag_system import print_result
+from utils.consts import DEFAULT_RETRIEVE_TOP_K, CSV_FILE_PATH
 
 # Try to load environment variables from .env file (optional)
 with open('utils/api_keys.json', 'r') as f:
@@ -20,7 +22,7 @@ def main():
     
     # Example 1: Index the talks (uncomment to run)
     # print("Indexing TED Talks...")
-    # rag.load_and_index_talks("ted_talks_en.csv")
+    # rag.load_and_index_talks(CSV_FILE_PATH)
     # print("Indexing complete!")
     
     # Example 2: Query the system
@@ -42,18 +44,8 @@ def main():
     print("=" * 80)
     
     for question in questions:
-        print(f"\nQuestion: {question}")
-        print("-" * 80)
-        
-        result = rag.query(question, top_k=5)
-        
-        print(f"\nAnswer:\n{result['answer']}\n")
-        print(f"Sources ({result['num_sources']}):")
-        for i, source in enumerate(result['sources'], 1):
-            print(f"  {i}. '{source['title']}' by {source['speaker']} "
-                  f"(relevance: {source['relevance_score']:.3f})")
-        
-        print("\n" + "=" * 80)
+        print_result(rag, question, DEFAULT_RETRIEVE_TOP_K)
+        print("\n" + "="*80 + "\n")
 
 if __name__ == "__main__":
     main()
