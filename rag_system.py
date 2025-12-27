@@ -665,15 +665,26 @@ Return: Title: '[exact title]' by [exact speaker]. ONE talk only."""
 
         # For multi-result fact queries, format answer ourselves with title, speaker, and relevance score
         if is_multi_result_fact_query:
-            answer_lines = []
-            for chunk in chunks:
-                title = chunk.get('title', '').strip()
-                speaker = chunk.get('speaker', '').strip()
-                score = chunk.get('score', 0.0)
-                if title:
-                    speaker_part = f" by {speaker}" if speaker else ""
-                    answer_lines.append(f"- '{title}'{speaker_part} (relevance: {score:.3f})")
-            answer = "\n".join(answer_lines) if answer_lines else IDK_RESPONSE
+            # Check if retrieved chunks have sufficient relevance to answer the question
+            # If the highest relevance score is too low, the chunks likely don't answer the question
+            if chunks:
+                max_score = max(chunk.get('score', 0.0) for chunk in chunks)
+                # Threshold: if best match has relevance < 0.3, consider it insufficient
+                # This ensures we follow the prompt requirement to say "I don't know" when answer can't be determined
+                if max_score < 0.37:
+                    answer = IDK_RESPONSE
+                else:
+                    answer_lines = []
+                    for chunk in chunks:
+                        title = chunk.get('title', '').strip()
+                        speaker = chunk.get('speaker', '').strip()
+                        score = chunk.get('score', 0.0)
+                        if title:
+                            speaker_part = f" by {speaker}" if speaker else ""
+                            answer_lines.append(f"- '{title}'{speaker_part} (relevance: {score:.3f})")
+                    answer = "\n".join(answer_lines) if answer_lines else IDK_RESPONSE
+            else:
+                answer = IDK_RESPONSE
         else:
             # Get answer from LLM using OpenAI Responses API
             print("Generating answer (Responses API)...")
