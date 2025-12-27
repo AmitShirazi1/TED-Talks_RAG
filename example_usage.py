@@ -11,19 +11,19 @@ from utils.consts import DEFAULT_RETRIEVE_TOP_K, CSV_FILE_PATH
 with open('utils/api_keys.json', 'r') as f:
     api_keys = json.load(f)
     PINECONE_API_KEY = api_keys['PINECONE_API_KEY']
-    OPENAI_API_KEY = api_keys['OPENAI_API_KEY']
+    LLMOD_API_KEY = api_keys['LLMOD_API_KEY']
 
 def main():
     # Initialize the RAG system
     rag = TEDTalksRAG(
         pinecone_api_key=PINECONE_API_KEY,
-        openai_api_key=OPENAI_API_KEY
+        llmod_api_key=LLMOD_API_KEY
     )
     
-    # Example 1: Index the talks (uncomment to run)
-    # print("Indexing TED Talks...")
-    # rag.load_and_index_talks(CSV_FILE_PATH)
-    # print("Indexing complete!")
+    # Example 1: Index the talks
+    print("Indexing TED Talks...")
+    rag.load_and_index_talks(CSV_FILE_PATH)
+    print("Indexing complete!")
     
     # Example 2: Query the system
     questions = [

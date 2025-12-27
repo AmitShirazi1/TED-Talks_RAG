@@ -76,10 +76,8 @@ class PromptResponse(BaseModel):
 
 
 class StatsResponse(BaseModel):
-    chunk_size: int  # Size in characters
-    overlap: int  # Overlap in characters
-    overlap_ratio: float  # Overlap as a ratio of chunk_size (0.0 to 1.0)
-    chunk_unit: str  # Unit of measurement for chunking ("characters" or "tokens")
+    chunk_size: int
+    overlap_ratio: float
     top_k: int
 
 
@@ -133,18 +131,7 @@ async def post_prompt(request: PromptRequest):
 
 @app.get("/api/stats", response_model=StatsResponse)
 async def get_stats():
-    """
-    Get statistics about the RAG system configuration.
-    
-    Note: Chunking is performed by characters, not tokens. The chunk_size and overlap
-    values represent character counts, not token counts.
-    
-    Returns:
-        StatsResponse with chunk_size (in characters), overlap_ratio, and top_k
-    """
-    # Calculate overlap_ratio as a ratio (0.0 to 1.0)
     overlap_ratio = (DEFAULT_OVERLAP / DEFAULT_CHUNK_SIZE) if DEFAULT_CHUNK_SIZE > 0 else 0.0
-    
     return StatsResponse(
         chunk_size=DEFAULT_CHUNK_SIZE,
         overlap_ratio=round(overlap_ratio, 4),

@@ -1,6 +1,5 @@
-CSV_FILE_PATH = "tiny_ted_data.csv"
+CSV_FILE_PATH = "tiny_ted.csv"
 
-INDEX_NAME = "tiny-ted"
 EMBEDDING_MODEL = "RPRTHPB-text-embedding-3-small"
 CHAT_MODEL = "RPRTHPB-gpt-5-mini"
 
@@ -13,7 +12,7 @@ Default chunk size:
 -   We also learned that the recommended number of tokens per chunk in conversational data is 200-400.
     This also may apply to TED talks, as they are somewhat conversational.
 -   In addition, considering the limited budget, it's best to choose a chunk size that is as small as possible (without losing too much information).
--   Based on the above and consulting GPT, I chose a chunk size of around 500 tokens.
+-   Based on the above and consulting GPT, I chose a chunk size of around 2000 characters (approximately 500 tokens).
 
 Default overlap:
 -   We learned in class that the recommended overlap long articles and books is 5-15%.
@@ -28,6 +27,27 @@ Default retrieval K:
 -   Considering the limited budget, it's best to choose a retrieval K that is as small as possible (without losing too much context).
 -   Based on the above and consulting GPT, I finally chose to lower K to 5.
 """
-DEFAULT_CHUNK_SIZE = 2000  # ~500 tokens
+DEFAULT_CHUNK_SIZE = 2000  # characters (approx 500 tokens)
 DEFAULT_OVERLAP = 150  # 7.5% of 2000 characters
 DEFAULT_RETRIEVE_TOP_K = 5
+
+
+def get_index_name(csv_file_path: str=CSV_FILE_PATH, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_OVERLAP) -> str:
+    """
+    Generate index name based on chunking parameters to avoid stale indices.
+    
+    When chunking parameters change, a new index name is generated, preventing
+    accidental use of stale indices with old chunking settings.
+    
+    Args:
+        chunk_size: Chunk size in characters
+        overlap: Overlap in characters
+        
+    Returns:
+        Index name string, e.g., "ted-talks-en-c2000-o150"
+    """
+    return f"{csv_file_path.split('.')[0].replace('_', '-')}-c{chunk_size}-o{overlap}"
+
+
+# Index name includes chunking parameters to prevent stale indices
+INDEX_NAME = get_index_name()
