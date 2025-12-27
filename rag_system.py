@@ -17,7 +17,8 @@ from utils.consts import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_OVERLAP,
     DEFAULT_RETRIEVE_TOP_K,
-    get_index_name
+    get_index_name,
+    IDK_RESPONSE
 )
 import json
 from openai import OpenAI
@@ -291,7 +292,8 @@ class TEDTalksRAG:
                 "speaker": match.metadata.get("speaker"),
                 "topics": match.metadata.get("topics"),
                 "chunk_text": match.metadata.get("chunk_text"),
-                "description": match.metadata.get("description")
+                "description": match.metadata.get("description"),
+                "chunk_index": match.metadata.get("chunk_index")
             })
 
         return chunks
@@ -523,7 +525,7 @@ class TEDTalksRAG:
     def _no_chunks_found_response(self) -> Dict:
         """Return a response when no chunks are found."""
         return {
-            "answer": "I don't know based on the provided TED data.",
+            "answer": IDK_RESPONSE,
             "sources": [],
             "num_sources": 0,
             "context": [],
@@ -607,6 +609,9 @@ class TEDTalksRAG:
         context_parts = []
         sources = []
 
+        # For multi-result fact queries, we'll format answer ourselves and skip sources
+        is_multi_result_fact_query = is_fact_query and requested_number and requested_number > 1
+
         for i, chunk in enumerate(chunks, 1):
             context_part = f"[Source {i}]\n"
             context_part += f"Title: {chunk['title']}\n"
@@ -616,14 +621,16 @@ class TEDTalksRAG:
             context_part += f"Transcript excerpt:\n{chunk['chunk_text']}\n"
             context_parts.append(context_part)
 
-            # Add source for each chunk (so source numbers match [Source i])
-            sources.append({
-                "source_num": i,
-                "title": chunk['title'],
-                "speaker": chunk['speaker'],
-                "talk_id": chunk['talk_id'],
-                "relevance_score": chunk['score']
-            })
+            # Only add sources if not a multi-result fact query (to avoid duplication)
+            if not is_multi_result_fact_query:
+                sources.append({
+                    "source_num": i,
+                    "title": chunk['title'],
+                    "speaker": chunk['speaker'],
+                    "talk_id": chunk['talk_id'],
+                    "relevance_score": chunk['score'],
+                    "chunk_index": chunk.get('chunk_index')
+                })
 
         context = "\n\n".join(context_parts)
 
@@ -632,8 +639,8 @@ class TEDTalksRAG:
 
         # Create specialized prompt for general QA queries
         if (not is_summary_query) and (not is_recommendation_query) and (not is_fact_query):
-            system_prompt += """
-Output format: 2-5 bullet points (each ending with [Source #]), plus 1-2 evidence quotes with [Source #]. If relevant statements exist, DO NOT write "I don't know based on the provided TED data."."""
+            system_prompt += f"""
+Output format: 2-5 bullet points (each ending with [Source #]), plus 1-2 evidence quotes with [Source #]. If relevant statements exist, DO NOT write {IDK_RESPONSE}."""
 
         # Create specialized prompt for summary extraction queries
         if is_summary_query:
@@ -643,7 +650,7 @@ Return: Title: [exact title], Speaker: [exact speaker], Key idea (1-3 sentences)
         # Create specialized prompt for recommendation queries
         elif is_recommendation_query:
             system_prompt += """
-Output: Recommended talk: [Title] by [Speaker], Why this fits (2-4 bullets with [Source #]), Evidence (1-2 quotes with [Source #]). Recommend ONE talk."""
+Output: Recommended talk: '[Title]' by [Speaker], Why this fits (2-4 bullets with [Source #]), Evidence (1-2 quotes with [Source #]). Recommend ONE talk."""
 
         # Create specialized prompt for fact retrieval queries
         elif is_fact_query:
@@ -652,46 +659,102 @@ Output: Recommended talk: [Title] by [Speaker], Why this fits (2-4 bullets with 
 Return EXACTLY {requested_number} talk title(s) as bullet points. Use exact titles from context."""
             else:
                 system_prompt += """
-Return: Title: [exact title] by [exact speaker]. ONE talk only."""
+Return: Title: '[exact title]' by [exact speaker]. ONE talk only."""
 
         user_prompt = f"""\nQuestion: {user_question}\n\n Context from TED Talks database:\n {context}\n"""
 
-        # Get answer from LLM using OpenAI Responses API
-        print("Generating answer (Responses API)...")
-        try:
-            resp = self.responses_client.responses.create(
-                model=self.chat_model,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                reasoning={"effort": "low"},
-                max_output_tokens=250,
-                temperature=self.temperature,
-            )
-            answer = (resp.output_text or "").strip()
-            if not answer:
-                print("Warning: Responses API returned empty output_text")
-                answer = "I don't know based on the provided TED data."
-        except Exception as e:
-            print(f"Responses API failed, falling back to chat.completions: {e}")
-            # fallback: chat.completions, but give enough room so output isn't starved
-            resp = self.responses_client.chat.completions.create(
-                model=self.chat_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=self.temperature,
-                max_tokens=400,
-            )
-            answer = (resp.choices[0].message.content or "").strip() or "I don't know based on the provided TED data."
+        # For multi-result fact queries, format answer ourselves with title, speaker, and relevance score
+        if is_multi_result_fact_query:
+            answer_lines = []
+            for chunk in chunks:
+                title = chunk.get('title', '').strip()
+                speaker = chunk.get('speaker', '').strip()
+                score = chunk.get('score', 0.0)
+                if title:
+                    speaker_part = f" by {speaker}" if speaker else ""
+                    answer_lines.append(f"- '{title}'{speaker_part} (relevance: {score:.3f})")
+            answer = "\n".join(answer_lines) if answer_lines else IDK_RESPONSE
+        else:
+            # Get answer from LLM using OpenAI Responses API
+            print("Generating answer (Responses API)...")
+            try:
+                resp = self.responses_client.responses.create(
+                    model=self.chat_model,
+                    input=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    reasoning={"effort": "low"},
+                    max_output_tokens=250,
+                    temperature=self.temperature,
+                )
+                answer = (resp.output_text or "").strip()
+                if not answer:
+                    print("Warning: Responses API returned empty output_text")
+                    # For fact retrieval queries where we successfully retrieved the requested talks,
+                    # construct the answer from the available sources instead of defaulting to "I don't know"
+                    if is_fact_query and requested_number:
+                        # Single result: format as title by speaker
+                        chunk = chunks[0] if chunks else None
+                        if chunk:
+                            title = chunk.get('title', '').strip()
+                            speaker = chunk.get('speaker', '').strip()
+                            if title:
+                                answer = f"Title: '{title}'" + (f" by {speaker}" if speaker else "")
+                            else:
+                                answer = IDK_RESPONSE
+                        else:
+                            answer = IDK_RESPONSE
+                    else:
+                        answer = IDK_RESPONSE
+            except Exception as e:
+                print(f"Responses API failed, falling back to chat.completions: {e}")
+                # fallback: chat.completions, but give enough room so output isn't starved
+                resp = self.responses_client.chat.completions.create(
+                    model=self.chat_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=self.temperature,
+                    max_tokens=400,
+                )
+                fallback_answer = (resp.choices[0].message.content or "").strip()
+                if not fallback_answer:
+                    # For fact retrieval queries where we successfully retrieved the requested talks,
+                    # construct the answer from the available sources instead of defaulting to "I don't know"
+                    if is_fact_query and requested_number:
+                        # Single result: format as title by speaker
+                        chunk = chunks[0] if chunks else None
+                        if chunk:
+                            title = chunk.get('title', '').strip()
+                            speaker = chunk.get('speaker', '').strip()
+                            if title:
+                                fallback_answer = f"Title: '{title}'" + (f" by {speaker}" if speaker else "")
+                            else:
+                                fallback_answer = IDK_RESPONSE
+                        else:
+                            fallback_answer = IDK_RESPONSE
+                    else:
+                        fallback_answer = IDK_RESPONSE
+                answer = fallback_answer
 
         # Post-process: Remove "I don't know" prefix if model actually answered (has source citations)
-        IDK = "I don't know based on the provided TED data."
-        if answer.startswith(IDK) and ("[Source" in answer):
+        if answer.startswith(IDK_RESPONSE) and ("[Source" in answer):
             # If it cites sources, it *did* answer; remove the leading fallback line
-            answer = answer.replace(IDK, "", 1).strip()
+            answer = answer.replace(IDK_RESPONSE, "", 1).strip()
+
+        # Post-process: Remove cut-off last bullet only if clearly truncated (no citation AND no proper punctuation)
+        # Skip this for multi-result fact queries since we format those answers ourselves and they're always complete
+        if not is_multi_result_fact_query:
+            lines = answer.splitlines()
+            if lines:
+                last = lines[-1].strip()
+                if last.startswith("-"):
+                    has_cite = "[Source" in last
+                    ends_ok = last.endswith("]") or last.endswith(".") or last.endswith("!") or last.endswith("?")
+                    if (not has_cite) and (not ends_ok):
+                        answer = "\n".join(lines[:-1]).strip()
 
         # Prepare context list for API response
         # Note: chunks may have been deduplicated and sliced to N for fact queries,
@@ -734,9 +797,12 @@ def print_result(rag: TEDTalksRAG, question: str, top_k: int = DEFAULT_RETRIEVE_
     result = rag.query(question, top_k=top_k)
     answer = result['answer'] or "[EMPTY ANSWER FROM MODEL]"
     print(f"Answer:\n{answer}\n")
-    print(f"Sources ({result['num_sources']}):")
-    for i, source in enumerate(result['sources'], 1):
-        print(f"  {i}. '{source['title']}' by {source['speaker']} (relevance: {source['relevance_score']:.3f})\n")
+    # Only print Sources section if sources list is not empty (to avoid duplication for multi-result queries)
+    if result['sources']:
+        print(f"Sources ({result['num_sources']}):")
+        for i, source in enumerate(result['sources'], 1):
+            chunk_num = source.get('chunk_index', 'N/A')
+            print(f"  {i}. '{source['title']}' by {source['speaker']}, chunk number {chunk_num} (relevance: {source['relevance_score']:.3f})\n")
 
 
 def main():
@@ -753,6 +819,8 @@ def main():
                         help=f"Number of chunks to retrieve (default: {DEFAULT_RETRIEVE_TOP_K})")
     parser.add_argument("--temperature", type=float, default=1,
                         help=f"Temperature for the LLM (default: 1)")
+    parser.add_argument("--force-reindex", action="store_true",
+                        help="Force reindexing even if index already contains vectors (for index mode)")
 
     args = parser.parse_args()
 
@@ -772,7 +840,7 @@ def main():
 
     if args.mode == "index":
         # Index the talks
-        rag.load_and_index_talks(args.csv)
+        rag.load_and_index_talks(args.csv, force_reindex=args.force_reindex)
         stats = rag.get_index_stats()
         print(f"\nIndex statistics: {stats}")
 

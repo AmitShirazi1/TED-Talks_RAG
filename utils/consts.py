@@ -48,6 +48,7 @@ def get_index_name(csv_file_path: str=CSV_FILE_PATH, chunk_size: int = DEFAULT_C
     """
     return f"{csv_file_path.split('.')[0].replace('_', '-')}-c{chunk_size}-o{overlap}"
 
-
 # Index name includes chunking parameters to prevent stale indices
 INDEX_NAME = get_index_name()
+
+IDK_RESPONSE = "I don't know based on the provided TED data."
