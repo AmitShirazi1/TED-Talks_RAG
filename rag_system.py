@@ -696,7 +696,7 @@ Return: Title: '[exact title]' by [exact speaker]. ONE talk only."""
                         {"role": "user", "content": user_prompt},
                     ],
                     reasoning={"effort": "low"},
-                    max_output_tokens=250,
+                    max_output_tokens=500,
                     temperature=self.temperature,
                 )
                 answer = (resp.output_text or "").strip()
