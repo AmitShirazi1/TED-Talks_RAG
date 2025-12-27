@@ -39,7 +39,7 @@ class TEDTalksRAG:
         index_name: str = INDEX_NAME,
         embedding_model: str = EMBEDDING_MODEL,
         chat_model: str = CHAT_MODEL,
-        temperature: float = 0.1
+        temperature: float = 1
     ):
         """
         Initialize the RAG system.

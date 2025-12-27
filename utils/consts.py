@@ -1,4 +1,4 @@
-CSV_FILE_PATH = "tiny_ted.csv"
+CSV_FILE_PATH = "ted_talks_en.csv"
 
 EMBEDDING_MODEL = "RPRTHPB-text-embedding-3-small"
 CHAT_MODEL = "RPRTHPB-gpt-5-mini"
